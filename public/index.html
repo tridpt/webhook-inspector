@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NetPulse — Webhook & Request Inspector + API Fuzzer</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon">⚡</div>
+      <div>
+        <h1>NetPulse <span class="badge-version">PRO</span></h1>
+        <p class="subtitle">Bắt gói tin Webhook • Giải mã JWT/Base64/HMAC • Replay & Fuzz API</p>
+      </div>
+    </div>
+
+    <div class="sim-toolbar">
+      <span class="sim-label">Bắn mẫu thử:</span>
+      <button class="btn btn-sim" data-sim="payment" title="Giả lập Webhook thanh toán kèm chữ ký HMAC-SHA256 hợp lệ & JWT">
+        💳 Thanh toán (JWT + HMAC)
+      </button>
+      <button class="btn btn-sim" data-sim="telegram" title="Giả lập Webhook từ Telegram Bot">
+        🤖 Telegram Bot
+      </button>
+      <button class="btn btn-sim" data-sim="suspicious" title="Giả lập Request chứa Basic Auth, Base64 và chữ ký sai">
+        ⚠️ Payload Nghi vấn
+      </button>
+    </div>
+
+    <div class="status-group">
+      <div id="sse-indicator" class="sse-badge online">
+        <span class="dot"></span>
+        <span id="sse-text">Live Stream</span>
+      </div>
+      <button id="btn-toggle-pause" class="btn btn-secondary btn-sm">⏸ Tạm dừng</button>
+    </div>
+  </header>
+
+  <nav class="main-tabs">
+    <button class="tab-btn active" data-tab="inspector">
+      📡 Bắt Gói Tin <span id="req-count-badge" class="count-pill">0</span>
+    </button>
+    <button class="tab-btn" data-tab="replay">
+      🔁 Chỉnh Sửa &amp; Bắn Lại (Replay)
+    </button>
+    <button class="tab-btn" data-tab="fuzzer">
+      ⚡ API Fuzzer ({{FUZZ}})
+    </button>
+    <button class="tab-btn" data-tab="hunter">
+      🕵️‍♂️ Dò API Trang Web
+    </button>
+    <button class="tab-btn" data-tab="jwt">
+      🔐 JWT Studio
+    </button>
+    <button class="tab-btn" data-tab="diff">
+      ⚖️ So Sánh Gói Tin (Diff)
+    </button>
+    <button class="tab-btn" data-tab="endpoints">
+      🎯 Cấu Hình Endpoint (Mock &amp; Proxy)
+    </button>
+    <button class="tab-btn" data-tab="guide">
+      📖 Hướng Dẫn Sử Dụng
+    </button>
+  </nav>
+
+  <!-- Active Webhook URL Banner & Public Tunnel Control -->
+  <section class="endpoint-bar">
+    <div class="endpoint-bar-left">
+      <label for="active-endpoint-select">Endpoint đang chọn:</label>
+      <select id="active-endpoint-select" class="input-select"></select>
+      <div class="url-copy-box">
+        <code id="active-webhook-url">http://localhost:4080/hook/payment-webhook</code>
+        <button id="btn-copy-url" class="btn btn-sm btn-accent">📋 Copy Local</button>
+      </div>
+      <div id="public-tunnel-url-box" class="url-copy-box public-url-box hidden">
+        <span class="mini-tag hmac-ok">🌍 PUBLIC</span>
+        <code id="active-public-webhook-url">https://...</code>
+        <button id="btn-copy-public-url" class="btn btn-sm btn-warning">📋 Copy Public URL</button>
+      </div>
+    </div>
+    <div class="endpoint-bar-right" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+      <span id="active-endpoint-meta" class="meta-hint"></span>
+      <select id="tunnel-provider-select" class="input-select" style="padding:4px 8px; font-size:12px;" title="Chọn công cụ tạo đường hầm Internet">
+        <option value="ngrok">Tunnel: Ngrok (Đã cài sẵn)</option>
+        <option value="localhost.run">Tunnel: localhost.run (SSH miễn phí)</option>
+        <option value="pinggy">Tunnel: pinggy.io (SSH)</option>
+      </select>
+      <button id="btn-toggle-tunnel" class="btn btn-secondary btn-sm">🌍 Bật Public Tunnel</button>
+    </div>
+  </section>
+
+  <!-- TAB 1: LIVE INSPECTOR -->
+  <main id="tab-inspector" class="tab-panel active">
+    <div class="inspector-layout">
+      <!-- Left sidebar: Request stream list -->
+      <aside class="request-sidebar">
+        <div class="sidebar-controls">
+          <input type="text" id="search-requests" class="input-text" placeholder="🔍 Tìm theo đường dẫn, IP, nội dung body..." />
+          <div class="filter-row">
+            <select id="filter-method" class="input-select">
+              <option value="">Mọi Method</option>
+              <option value="POST">POST</option>
+              <option value="GET">GET</option>
+              <option value="PUT">PUT</option>
+              <option value="PATCH">PATCH</option>
+              <option value="DELETE">DELETE</option>
+            </select>
+            <button id="btn-export-postman-reqs" class="btn btn-secondary btn-sm" title="Xuất danh sách gói tin ra file Postman Collection v2.1">📦 Postman</button>
+            <button id="btn-clear-requests" class="btn btn-danger btn-sm" title="Xóa danh sách gói tin">🗑️ Xóa</button>
+          </div>
+        </div>
+        <div id="request-list" class="request-list"></div>
+      </aside>
+
+      <!-- Right detail pane -->
+      <section class="request-detail" id="request-detail-pane">
+        <div id="empty-detail-state" class="empty-state">
+          <div class="empty-icon">📡</div>
+          <h3>Chưa chọn gói tin nào</h3>
+          <p>Hãy bắn request tới URL Webhook phía trên hoặc bấm nút <strong>"💳 Thanh toán (JWT + HMAC)"</strong> trên thanh công cụ để tạo gói tin mẫu ngay lập tức.</p>
+        </div>
+
+        <div id="detail-content" class="detail-content hidden">
+          <div class="detail-header">
+            <div class="detail-title-row">
+              <span id="det-method" class="method-badge POST">POST</span>
+              <code id="det-url" class="det-url-text">/hook/payment-webhook</code>
+              <span id="det-status" class="status-pill status-2xx">200 OK</span>
+              <span id="det-time" class="meta-tag">1.2 ms</span>
+              <span id="det-size" class="meta-tag">342 B</span>
+            </div>
+            <div class="detail-actions">
+              <button id="btn-pin-diff-a" class="btn btn-secondary btn-sm" title="Chọn gói tin này làm mốc A để so sánh">⚖️ Ghim làm Gói A</button>
+              <button id="btn-pin-diff-b" class="btn btn-secondary btn-sm" title="Chọn gói tin này làm Gói B và mở bảng so sánh">⚖️ So sánh với A (Gói B)</button>
+              <button id="btn-send-to-replay" class="btn btn-accent btn-sm">🔁 Đẩy sang Replay</button>
+              <button id="btn-send-to-fuzzer" class="btn btn-warning btn-sm">⚡ Đẩy sang Fuzzer</button>
+              <button id="btn-delete-req" class="btn btn-danger btn-sm">🗑️ Xóa</button>
+            </div>
+          </div>
+
+          <div class="sub-tabs">
+            <button class="sub-tab-btn active" data-subtab="overview">🔍 Giải Mã &amp; Tổng Quan</button>
+            <button class="sub-tab-btn" data-subtab="headers">📋 Headers &amp; Query</button>
+            <button class="sub-tab-btn" data-subtab="body">📦 Body &amp; Hex Dump</button>
+            <button class="sub-tab-btn" data-subtab="hmac">🔐 Kiểm Tra Chữ Ký HMAC</button>
+            <button class="sub-tab-btn" data-subtab="codegen">💻 Xuất Code (cURL / Python / JS)</button>
+          </div>
+
+          <!-- Sub-tab: Overview & Smart Decoders -->
+          <div id="subtab-overview" class="sub-tab-content active">
+            <div class="cards-grid">
+              <div class="info-card">
+                <h4>Thông tin Kết nối</h4>
+                <div class="kv-list" id="det-meta-list"></div>
+              </div>
+              <div class="info-card">
+                <h4>Phản hồi từ NetPulse Mock / Proxy</h4>
+                <div class="kv-list" id="det-response-summary"></div>
+              </div>
+            </div>
+
+            <div class="decoder-section">
+              <h4>🔓 Tự Động Phát Hiện &amp; Giải Mã (JWT / Base64 / Basic Auth)</h4>
+              <div id="det-decoded-tokens"></div>
+            </div>
+          </div>
+
+          <!-- Sub-tab: Headers & Query -->
+          <div id="subtab-headers" class="sub-tab-content">
+            <div class="split-tables">
+              <div class="info-card">
+                <h4>Query Parameters</h4>
+                <div id="det-query-table"></div>
+              </div>
+              <div class="info-card">
+                <h4>Request Headers</h4>
+                <div id="det-headers-table"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sub-tab: Body & Hex -->
+          <div id="subtab-body" class="sub-tab-content">
+            <div class="body-toolbar">
+              <span id="det-body-format" class="meta-tag">Format: JSON</span>
+              <button id="btn-copy-body" class="btn btn-secondary btn-sm">📋 Copy Raw Body</button>
+            </div>
+            <div class="split-code">
+              <div class="code-box-wrap">
+                <h5>Nội dung Body (Đã định dạng)</h5>
+                <pre id="det-body-pretty" class="code-block"></pre>
+              </div>
+              <div class="code-box-wrap">
+                <h5>Hex Dump (512 bytes đầu)</h5>
+                <pre id="det-body-hex" class="code-block hex-block"></pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sub-tab: HMAC Signature Verifier -->
+          <div id="subtab-hmac" class="sub-tab-content">
+            <div class="info-card">
+              <h4>🔐 Kiểm Tra &amp; Tính Toán Chữ Ký Webhook (HMAC-SHA256 / SHA1 / SHA512)</h4>
+              <p class="hint-text">Nhập Secret Key để đối chiếu chữ ký trong Header của gói tin hoặc tạo chữ ký mới từ Raw Body.</p>
+              <div class="hmac-input-row">
+                <input type="text" id="hmac-secret-input" class="input-text" placeholder="Nhập Webhook Secret (VD: whsec_demo_secret_2026)..." />
+                <button id="btn-verify-hmac" class="btn btn-accent">Kiểm tra &amp; Tính chữ ký</button>
+              </div>
+              <div id="hmac-result-box" class="hmac-result-box"></div>
+            </div>
+          </div>
+
+          <!-- Sub-tab: Code Generator -->
+          <div id="subtab-codegen" class="sub-tab-content">
+            <div class="codegen-controls">
+              <button class="btn btn-secondary btn-sm active" data-lang="curl">cURL</button>
+              <button class="btn btn-secondary btn-sm" data-lang="powershell">PowerShell</button>
+              <button class="btn btn-secondary btn-sm" data-lang="python">Python (requests)</button>
+              <button class="btn btn-secondary btn-sm" data-lang="fetch">JavaScript (fetch)</button>
+              <button id="btn-copy-codegen" class="btn btn-accent btn-sm">📋 Copy Code</button>
+            </div>
+            <pre id="det-codegen-output" class="code-block"></pre>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- TAB 2: REPLAY STUDIO -->
+  <main id="tab-replay" class="tab-panel">
+    <div class="studio-grid">
+      <section class="studio-card">
+        <div class="card-header-row">
+          <h3>✏️ Soạn Thảo &amp; Chỉnh Sửa Request (Replay)</h3>
+          <button id="btn-replay-fill-local" class="btn btn-secondary btn-sm">Điền URL Webhook hiện tại</button>
+        </div>
+
+        <!-- 1-Click Import cURL from Chrome DevTools F12 -->
+        <details style="background:#0c1322; border:1px solid var(--border); border-radius:8px; padding:8px 12px;">
+          <summary style="cursor:pointer; color:#38bdf8; font-weight:700; font-size:12.5px;">
+            📥 Dán lệnh cURL từ Chrome F12 (Copy as cURL bash / cmd) — Tự động tách URL, Header, Cookie &amp; Body
+          </summary>
+          <div style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">
+            <textarea id="curl-import-input" class="input-textarea" rows="4" placeholder="curl 'https://api.example.com/v1/orders' -H 'Authorization: Bearer ...' --data-raw '{\"id\":1}'"></textarea>
+            <div class="btn-row">
+              <button id="btn-parse-curl-replay" class="btn btn-accent btn-xs">⚡ Nạp vào Replay Studio</button>
+              <button id="btn-parse-curl-fuzzer" class="btn btn-warning btn-xs">⚡ Nạp sang API Fuzzer</button>
+            </div>
+          </div>
+        </details>
+
+        <!-- Environment Variables ({{BASE_URL}}, {{API_TOKEN}}) -->
+        <details style="background:#0c1322; border:1px solid var(--border); border-radius:8px; padding:8px 12px;">
+          <summary style="cursor:pointer; color:#4ade80; font-weight:700; font-size:12.5px;">
+            🌐 Biến Môi Trường Dùng Chung (<code>{{BASE_URL}}</code>, <code>{{API_TOKEN}}</code>) — Áp dụng cho cả Replay &amp; Fuzzer
+          </summary>
+          <div style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">
+            <textarea id="env-vars-input" class="input-textarea" rows="4" placeholder="BASE_URL = http://localhost:4080&#10;WEBHOOK_SLUG = payment-webhook&#10;API_TOKEN = whsec_demo_secret_2026"></textarea>
+            <div class="btn-row">
+              <button id="btn-save-env-vars" class="btn btn-accent btn-xs">💾 Lưu Biến Môi Trường</button>
+              <button id="btn-use-env-url" class="btn btn-secondary btn-xs">🔗 Chèn mẫu {{BASE_URL}}/hook/{{WEBHOOK_SLUG}}</button>
+            </div>
+          </div>
+        </details>
+
+        <div class="url-bar-row">
+          <select id="replay-method" class="input-select method-select">
+            <option value="POST">POST</option>
+            <option value="GET">GET</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+            <option value="DELETE">DELETE</option>
+          </select>
+          <input type="text" id="replay-url" class="input-text" placeholder="https://... hoặc http://localhost:4080/hook/payment-webhook" />
+          <button id="btn-execute-replay" class="btn btn-accent">🚀 Bắn Request</button>
+          <button id="btn-audit-security" class="btn btn-warning" title="Kiểm tra lỗi cấu hình CORS, Security Headers &amp; rò rỉ dữ liệu nhạy cảm">🛡️ Quét Bảo Mật &amp; CORS</button>
+        </div>
+
+        <div class="form-group">
+          <div class="label-row">
+            <label>Headers (JSON hoặc mỗi dòng <code>Key: Value</code>)</label>
+          </div>
+          <textarea id="replay-headers" class="input-textarea" rows="5" placeholder="Content-Type: application/json&#10;Authorization: Bearer ..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <div class="label-row">
+            <label>Request Body (Raw / JSON)</label>
+            <button id="btn-format-replay-json" class="btn btn-secondary btn-xs">✨ Format JSON</button>
+          </div>
+          <textarea id="replay-body" class="input-textarea" rows="5" placeholder='{"event": "test", "amount": 100000}'></textarea>
+        </div>
+
+        <div class="form-group">
+          <div class="label-row">
+            <label>✅ Điều Kiện Kiểm Chứng Tự Động (API Assertions — mỗi dòng 1 điều kiện)</label>
+          </div>
+          <textarea id="replay-assertions" class="input-textarea" rows="3" placeholder="status == 200&#10;durationMs < 2000&#10;body contains success">status == 200
+durationMs < 2000</textarea>
+        </div>
+
+        <!-- Replay Execution History -->
+        <div class="info-card" style="margin-top:4px;">
+          <div class="card-header-row" style="margin-bottom:8px;">
+            <h4>📜 Lịch Sử Bắn Replay (<span id="replay-history-count">0</span>)</h4>
+            <button id="btn-clear-replays" class="btn btn-danger btn-xs">🗑️ Xóa lịch sử</button>
+          </div>
+          <div id="replay-history-list" class="request-list" style="max-height:190px; padding:0;"></div>
+        </div>
+      </section>
+
+      <section class="studio-card">
+        <h3>📥 Phản Hồi Từ Server Mục Tiêu &amp; Báo Cáo Bảo Mật</h3>
+        <div id="replay-empty" class="empty-state small">
+          <p>Nhấn <strong>"🚀 Bắn Request"</strong> để xem phản hồi trực tiếp (không bị chặn CORS), hoặc nhấn <strong>"🛡️ Quét Bảo Mật &amp; CORS"</strong> để chấm điểm an toàn của API.</p>
+        </div>
+
+        <!-- Security & CORS Audit Report -->
+        <div id="replay-security-box" class="info-card hidden" style="border-color:#f59e0b;"></div>
+
+        <!-- Automated Assertions Result Box -->
+        <div id="replay-assertions-box" class="info-card hidden" style="border-color:#22c55e;"></div>
+
+        <div id="replay-result" class="hidden">
+          <div class="response-meta-bar">
+            <span id="rep-status-badge" class="status-pill status-2xx">200 OK</span>
+            <span id="rep-time-badge" class="meta-tag">12 ms</span>
+            <span id="rep-size-badge" class="meta-tag">128 B</span>
+          </div>
+          <h5>Response Headers</h5>
+          <pre id="rep-res-headers" class="code-block compact-code"></pre>
+          <h5>Response Body</h5>
+          <pre id="rep-res-body" class="code-block"></pre>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- TAB 3: API FUZZER -->
+  <main id="tab-fuzzer" class="tab-panel">
+    <div class="studio-grid">
+      <section class="studio-card">
+        <div class="card-header-row">
+          <h3>⚡ Cấu Hình Chiến Dịch Fuzzing</h3>
+          <span class="meta-tag">Đặt <code>{{FUZZ}}</code> vào vị trí muốn chèn Payload</span>
+        </div>
+
+        <div class="url-bar-row">
+          <select id="fuzz-method" class="input-select method-select">
+            <option value="POST">POST</option>
+            <option value="GET">GET</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+            <option value="DELETE">DELETE</option>
+          </select>
+          <input type="text" id="fuzz-url" class="input-text" placeholder="http://localhost:4080/hook/payment-webhook?id={{FUZZ}}" />
+        </div>
+
+        <div class="form-group">
+          <label>Headers (có thể chèn <code>{{FUZZ}}</code>)</label>
+          <textarea id="fuzz-headers" class="input-textarea" rows="4">Content-Type: application/json
+X-Forwarded-For: 127.0.0.1</textarea>
+        </div>
+
+        <div class="form-group">
+          <label>Body Template (đặt <code>{{FUZZ}}</code> vào giá trị muốn thử nghiệm)</label>
+          <textarea id="fuzz-body" class="input-textarea" rows="6">{
+  "orderId": "DH88291",
+  "amount": "{{FUZZ}}",
+  "note": "Test payload"
+}</textarea>
+        </div>
+
+        <div class="fuzz-options-row">
+          <div class="form-group">
+            <label>Bộ mẫu Payload có sẵn</label>
+            <select id="fuzz-preset-select" class="input-select">
+              <option value="boundary">Boundary &amp; Logic Edge Cases (Số âm, tràn số, rỗng...)</option>
+              <option value="sqli">SQL / NoSQL Injection Probes</option>
+              <option value="xss_ssti">XSS &amp; Template Injection (SSTI)</option>
+              <option value="idor">IDOR / Dò quét ID số (1..15)</option>
+            </select>
+          </div>
+          <div class="form-group small-input">
+            <label>Luồng song song</label>
+            <input type="number" id="fuzz-concurrency" class="input-text" value="4" min="1" max="10" />
+          </div>
+          <div class="form-group small-input">
+            <label>Độ trễ (ms)</label>
+            <input type="number" id="fuzz-delay" class="input-text" value="0" min="0" max="2000" />
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Danh sách Payloads (mỗi dòng 1 payload)</label>
+          <textarea id="fuzz-payload-list" class="input-textarea" rows="6"></textarea>
+        </div>
+
+        <button id="btn-start-fuzz" class="btn btn-warning btn-full">⚡ Chạy Fuzzing &amp; Phân Tích Dị Thường</button>
+      </section>
+
+      <section class="studio-card">
+        <div class="card-header-row">
+          <h3>📊 Kết Quả Fuzzing &amp; Phát Hiện Dị Thường</h3>
+          <div id="fuzz-summary-badges"></div>
+        </div>
+
+        <div id="fuzz-empty" class="empty-state small">
+          <p>Chèn <code>{{FUZZ}}</code> vào URL, Header hoặc Body bên trái rồi nhấn <strong>"⚡ Chạy Fuzzing"</strong>. Hệ thống sẽ tự động đo Baseline và đánh dấu các phản hồi bất thường (khác mã HTTP, chênh lệch kích thước, phản hồi chậm, rò rỉ lỗi).</p>
+        </div>
+
+        <div id="fuzz-results-wrap" class="hidden">
+          <div class="table-scroll">
+            <table class="data-table" id="fuzz-results-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Payload</th>
+                  <th>HTTP</th>
+                  <th>Thời gian</th>
+                  <th>Kích thước</th>
+                  <th>Phân tích / Dị thường</th>
+                </tr>
+              </thead>
+              <tbody id="fuzz-results-tbody"></tbody>
+            </table>
+          </div>
+          <div id="fuzz-inspect-box" class="fuzz-inspect-box hidden">
+            <h5>Chi tiết phản hồi của Payload: <code id="fuzz-inspect-payload"></code></h5>
+            <pre id="fuzz-inspect-body" class="code-block compact-code"></pre>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- TAB 3.5: WEBSITE API HUNTER -->
+  <main id="tab-hunter" class="tab-panel">
+    <div class="guide-container">
+      <section class="studio-card">
+        <div class="card-header-row">
+          <div>
+            <h3>🕵️‍♂️ Dò Tìm &amp; Bóc Tách API Từ Trang Web Bất Kỳ (Web API Hunter)</h3>
+            <p class="subtitle">Tự động tải HTML + các file JavaScript Bundle (<code>.js</code>) của trang web để tìm ra toàn bộ đường dẫn API ẩn (<code>fetch</code>, <code>axios</code>, <code>/api/v1/...</code>, GraphQL, OpenAPI/Swagger, WebSocket).</p>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-secondary btn-sm" onclick="fillHunterSample('demo')">🧪 Mẫu Demo Shop</button>
+            <button class="btn btn-secondary btn-sm" onclick="fillHunterSample('json')">🌐 Mẫu JSONPlaceholder</button>
+            <button id="btn-export-postman-hunter" class="btn btn-accent btn-sm">📦 Xuất Postman (.json)</button>
+          </div>
+        </div>
+
+        <div class="url-bar-row" style="flex-wrap:wrap;">
+          <input type="text" id="hunter-url" class="input-text" placeholder="Nhập địa chỉ trang web bất kỳ (VD: https://... hoặc http://localhost:4080/demo-webapp)" />
+          <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; color:#4ade80; font-weight:600; white-space:nowrap;">
+            <input type="checkbox" id="hunter-use-headless" checked />
+            🌐 Bắt sống XHR/Fetch bằng Trình duyệt ngầm (Chrome/Edge)
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-muted); white-space:nowrap;">
+            <input type="checkbox" id="hunter-probe-specs" checked />
+            Dò thêm OpenAPI/Swagger
+          </label>
+          <button id="btn-run-hunter" class="btn btn-accent">🔍 Quét &amp; Lấy API</button>
+        </div>
+      </section>
+
+      <div id="hunter-empty" class="empty-state">
+        <div class="empty-icon">🕵️‍♂️</div>
+        <h3>Nhập địa chỉ trang web để bắt đầu bóc tách API</h3>
+        <p>Hệ thống sẽ quét mã nguồn HTML, tự động tải các file <code>.js</code> (Webpack/Vite/Next.js chunks) và liệt kê mọi API mà trang web đó đang gọi. Bạn có thể bấm <strong>"🧪 Mẫu Demo Shop"</strong> phía trên để xem thử ngay!</p>
+      </div>
+
+      <div id="hunter-results-area" class="hidden" style="display:flex; flex-direction:column; gap:16px;">
+        <div class="cards-grid">
+          <div class="info-card">
+            <h4>🌐 Thông Tin Trang Mục Tiêu</h4>
+            <div id="hunter-page-meta" class="kv-list"></div>
+          </div>
+          <div class="info-card">
+            <h4>⚙️ Biến Môi Trường &amp; Cấu Hình Lộ Trong JS</h4>
+            <div id="hunter-configs-list" class="kv-list"></div>
+          </div>
+        </div>
+
+        <section class="studio-card">
+          <div class="card-header-row">
+            <h3>🎯 Danh Sách API &amp; Endpoint Tìm Thấy (<span id="hunter-ep-count">0</span>)</h3>
+            <input type="text" id="hunter-filter-input" class="input-text" style="max-width:280px;" placeholder="🔍 Lọc nhanh API..." />
+          </div>
+
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Method</th>
+                  <th>Đường dẫn API đầy đủ (Full URL)</th>
+                  <th>Loại phát hiện</th>
+                  <th>Nguồn phát hiện</th>
+                  <th>Thao tác nhanh</th>
+                </tr>
+              </thead>
+              <tbody id="hunter-endpoints-tbody"></tbody>
+            </table>
+          </div>
+
+          <div id="hunter-quicktest-box" class="fuzz-inspect-box hidden">
+            <div class="card-header-row" style="margin-bottom:6px;">
+              <h5>📥 Kết quả gọi thử trực tiếp: <code id="hunter-quicktest-url"></code></h5>
+              <span id="hunter-quicktest-status" class="status-pill status-2xx">200 OK</span>
+            </div>
+            <pre id="hunter-quicktest-body" class="code-block compact-code"></pre>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- TAB 3.8: JWT STUDIO (EDITOR / FORGER / SECRET AUDITOR) -->
+  <main id="tab-jwt" class="tab-panel">
+    <div class="studio-grid">
+      <section class="studio-card">
+        <div class="card-header-row">
+          <h3>🔐 Giải Mã, Chỉnh Sửa &amp; Giả Mạo JWT (JWT Studio)</h3>
+          <button id="btn-jwt-load-sample" class="btn btn-secondary btn-sm">🧪 Nạp JWT mẫu</button>
+        </div>
+
+        <div class="form-group">
+          <div class="label-row">
+            <label>Chuỗi JWT đầu vào (có thể dán từ <code>Authorization: Bearer ...</code>)</label>
+            <button id="btn-jwt-decode" class="btn btn-secondary btn-xs">🔍 Giải mã xuống dưới</button>
+          </div>
+          <textarea id="jwt-raw-input" class="input-textarea" rows="3" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."></textarea>
+        </div>
+
+        <div class="split-code">
+          <div class="form-group">
+            <label>Header (JSON)</label>
+            <textarea id="jwt-header-input" class="input-textarea" rows="5">{
+  "alg": "HS256",
+  "typ": "JWT"
+}</textarea>
+          </div>
+          <div class="form-group">
+            <div class="label-row">
+              <label>Payload / Claims (JSON)</label>
+              <div class="btn-row">
+                <button id="btn-jwt-set-admin" class="btn btn-secondary btn-xs" title="Đặt role=admin">👑 role=admin</button>
+                <button id="btn-jwt-extend-exp" class="btn btn-secondary btn-xs" title="Cộng thêm 24h vào exp">⏰ +24h exp</button>
+              </div>
+            </div>
+            <textarea id="jwt-payload-input" class="input-textarea" rows="5">{
+  "sub": "merchant_01",
+  "role": "user",
+  "exp": 1893456000
+}</textarea>
+          </div>
+        </div>
+
+        <div class="fuzz-options-row">
+          <div class="form-group">
+            <label>Secret Key để ký lại (HS256 / HS384 / HS512)</label>
+            <input type="text" id="jwt-secret-input" class="input-text" value="whsec_demo_secret_2026" placeholder="Nhập Secret Key..." />
+          </div>
+          <div class="form-group small-input">
+            <label>Chế độ tạo</label>
+            <select id="jwt-sign-mode" class="input-select">
+              <option value="sign">Ký chuẩn HMAC</option>
+              <option value="alg_none">Tấn công alg: none</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button id="btn-jwt-generate" class="btn btn-accent">⚡ Tạo &amp; Ký Lại Token Mới</button>
+          <button id="btn-jwt-push-replay" class="btn btn-warning">🔁 Gắn Token Này Sang Replay Studio</button>
+        </div>
+
+        <div class="form-group">
+          <div class="label-row">
+            <label>Token Đầu Ra (Đã chỉnh sửa / ký mới)</label>
+            <button id="btn-jwt-copy-output" class="btn btn-secondary btn-xs">📋 Copy Token</button>
+          </div>
+          <textarea id="jwt-output-token" class="input-textarea" rows="3" readonly placeholder="Token sau khi ký mới hoặc chuyển sang alg:none sẽ hiện tại đây..."></textarea>
+        </div>
+      </section>
+
+      <section class="studio-card">
+        <div class="card-header-row">
+          <h3>🕵️‍♂️ Dò Tìm Secret Key Yếu (JWT Weak Secret Auditor)</h3>
+          <span class="meta-tag">Tích hợp 30+ khóa mặc định phổ biến</span>
+        </div>
+        <p class="subtitle">Kiểm tra xem chuỗi JWT ở cột bên trái có đang được ký bằng các khóa bí mật yếu/mặc định (<code>secret</code>, <code>123456</code>, <code>jwt_secret</code>, <code>admin</code>...) hay không.</p>
+
+        <div class="form-group">
+          <label>Bổ sung danh sách Secret nghi ngờ của riêng bạn (mỗi dòng 1 từ khóa, tùy chọn)</label>
+          <textarea id="jwt-custom-wordlist" class="input-textarea" rows="6" placeholder="my_company_secret&#10;vietqr_2026&#10;dev_key_123"></textarea>
+        </div>
+
+        <button id="btn-jwt-audit-secret" class="btn btn-warning btn-full">🔥 Bắt Đầu Dò Tìm Secret Key</button>
+
+        <div id="jwt-audit-result" class="info-card">
+          <p class="meta-hint">Nhấn <strong>"🔥 Bắt Đầu Dò Tìm Secret Key"</strong> để đối chiếu chữ ký JWT với từ điển.</p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- TAB 3.9: SIDE-BY-SIDE DIFF VIEWER -->
+  <main id="tab-diff" class="tab-panel">
+    <div class="guide-container">
+      <section class="studio-card">
+        <div class="card-header-row">
+          <div>
+            <h3>⚖️ So Sánh 2 Gói Tin / Phản Hồi (Side-by-Side Diff Viewer)</h3>
+            <p class="subtitle">Đối chiếu sự khác biệt về Thời gian, Kích thước, Headers, Query Params và từng trường dữ liệu JSON / từng dòng Body giữa 2 gói tin.</p>
+          </div>
+          <div class="btn-row">
+            <button id="btn-diff-swap" class="btn btn-secondary btn-sm">🔄 Đảo chiều A ↔ B</button>
+            <button id="btn-diff-run" class="btn btn-accent btn-sm">🔍 Phân tích &amp; So sánh</button>
+          </div>
+        </div>
+
+        <div class="split-code">
+          <div class="form-group">
+            <label>📌 Gói tin A (Gốc / Baseline)</label>
+            <select id="diff-select-a" class="input-select"></select>
+          </div>
+          <div class="form-group">
+            <label>📌 Gói tin B (Đối chiếu / Đã chỉnh sửa)</label>
+            <select id="diff-select-b" class="input-select"></select>
+          </div>
+        </div>
+      </section>
+
+      <div id="diff-empty-state" class="empty-state small">
+        <div class="empty-icon">⚖️</div>
+        <h3>Chọn 2 gói tin để bắt đầu so sánh</h3>
+        <p>Bạn có thể bắn 2 gói tin mẫu khác nhau trên thanh công cụ rồi chọn Gói A và Gói B ở trên (hoặc bấm nút <strong>"⚖️ Ghim làm Gói A"</strong> trong màn hình Bắt Gói Tin).</p>
+      </div>
+
+      <div id="diff-results-area" class="hidden" style="display:flex; flex-direction:column; gap:16px;">
+        <!-- 1. Overview & Delta -->
+        <div class="cards-grid">
+          <div class="info-card">
+            <h4>📊 Chênh Lệch Tổng Quan (A vs B)</h4>
+            <div id="diff-meta-summary" class="kv-list"></div>
+          </div>
+          <div class="info-card">
+            <h4>🔑 Các Trường JSON Thay Đổi Giá Trị</h4>
+            <div id="diff-json-fields" class="kv-list"></div>
+          </div>
+        </div>
+
+        <!-- 2. Headers Diff -->
+        <section class="studio-card">
+          <h4>📋 So Sánh Headers &amp; Query Parameters (<span id="diff-headers-count">0</span> điểm khác biệt)</h4>
+          <div id="diff-headers-box" class="kv-list"></div>
+        </section>
+
+        <!-- 3. Line-by-Line Body Diff -->
+        <section class="studio-card">
+          <div class="card-header-row">
+            <h4>📦 So Sánh Chi Tiết Nội Dung Body (Line-by-Line Diff)</h4>
+            <div class="req-badges">
+              <span class="mini-tag hmac-ok">+ Dòng thêm mới ở B</span>
+              <span class="mini-tag hmac-bad">- Dòng bị xóa / cũ ở A</span>
+            </div>
+          </div>
+          <div class="split-code">
+            <div>
+              <div class="meta-hint" style="margin-bottom:4px;">Nội dung Body Gói A</div>
+              <pre id="diff-body-a" class="code-block"></pre>
+            </div>
+            <div>
+              <div class="meta-hint" style="margin-bottom:4px;">Kết quả Hợp nhất Diff (Unified Diff A → B)</div>
+              <div id="diff-body-unified" class="code-block diff-lines-box"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- TAB 4: ENDPOINTS & MOCK MANAGER -->
+  <main id="tab-endpoints" class="tab-panel">
+    <div class="studio-grid">
+      <section class="studio-card">
+        <h3>➕ Tạo Hoặc Cập Nhật Endpoint</h3>
+        <input type="hidden" id="ep-id" value="" />
+        <div class="form-group">
+          <label>Tên gợi nhớ</label>
+          <input type="text" id="ep-name" class="input-text" placeholder="VD: Webhook Thanh Toán SePay / VietQR" />
+        </div>
+        <div class="form-group">
+          <label>Đường dẫn Slug (<code>/hook/&lt;slug&gt;</code>)</label>
+          <input type="text" id="ep-slug" class="input-text" placeholder="VD: sepay-callback" />
+        </div>
+        <div class="fuzz-options-row">
+          <div class="form-group">
+            <label>HTTP Status trả về</label>
+            <input type="number" id="ep-status" class="input-text" value="200" />
+          </div>
+          <div class="form-group">
+            <label>Content-Type</label>
+            <input type="text" id="ep-content-type" class="input-text" value="application/json" />
+          </div>
+          <div class="form-group">
+            <label>Giả lập độ trễ (ms)</label>
+            <input type="number" id="ep-delay" class="input-text" value="0" min="0" max="15000" title="Giúp test khả năng chịu timeout của bên gửi webhook" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Secret Key (để tự động kiểm tra chữ ký HMAC khi có gói tin tới)</label>
+          <input type="text" id="ep-secret" class="input-text" placeholder="VD: whsec_demo_secret_2026" />
+          <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#fbbf24; margin-top:4px; cursor:pointer;">
+            <input type="checkbox" id="ep-require-hmac" />
+            🔒 Luật điều kiện: Tự động từ chối (trả về HTTP 401) nếu gói tin thiếu hoặc sai chữ ký HMAC
+          </label>
+        </div>
+        <div class="form-group">
+          <label>Auto-Forward Proxy URL (Hỗ trợ bắn song song nhiều đích: cách nhau bằng dấu phẩy)</label>
+          <input type="text" id="ep-forward" class="input-text" placeholder="VD: http://localhost:3000/api/webhook, http://localhost:5000/backup-hook" />
+        </div>
+        <div class="form-group">
+          <div class="label-row">
+            <label>🔔 Cảnh Báo Về Telegram Bot / Discord Webhook / Custom URL</label>
+            <button id="btn-test-ep-notify" type="button" class="btn btn-secondary btn-xs">🔔 Gửi thử Cảnh báo</button>
+          </div>
+          <input type="text" id="ep-notify-url" class="input-text" placeholder="VD: https://discord.com/api/webhooks/... hoặc https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<ID>" />
+          <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#38bdf8; margin-top:4px; cursor:pointer;">
+            <input type="checkbox" id="ep-notify-anomaly-only" />
+            🚨 Chỉ bắn thông báo khi phát hiện gói tin bất thường (sai chữ ký HMAC, lỗi HTTP &gt;= 400 hoặc payload nghi vấn)
+          </label>
+        </div>
+        <div class="form-group">
+          <label>Mock Response Body (hỗ trợ biến <code>{{requestId}}</code>, <code>{{timestamp}}</code>, <code>{{slug}}</code>)</label>
+          <textarea id="ep-body" class="input-textarea" rows="5">{
+  "success": true,
+  "requestId": "{{requestId}}",
+  "timestamp": "{{timestamp}}"
+}</textarea>
+        </div>
+        <div class="btn-row">
+          <button id="btn-save-endpoint" class="btn btn-accent">💾 Lưu Endpoint</button>
+          <button id="btn-reset-endpoint-form" class="btn btn-secondary">Làm mới Form</button>
+        </div>
+      </section>
+
+      <section class="studio-card">
+        <div class="card-header-row">
+          <h3>🎯 Danh Sách Endpoints &amp; Lưu Trữ Bền Vững</h3>
+          <div class="btn-row">
+            <button id="btn-export-backup" class="btn btn-secondary btn-xs" title="Xuất toàn bộ Endpoints, Biến môi trường, Gói tin &amp; Lịch sử Replay ra file JSON">📥 Xuất Backup (.json)</button>
+            <button id="btn-import-backup" class="btn btn-accent btn-xs" title="Khôi phục toàn bộ dữ liệu từ file Backup JSON">📤 Nhập Backup</button>
+            <input type="file" id="backup-file-input" accept=".json" class="hidden" />
+          </div>
+        </div>
+        <p class="meta-hint">💾 Tự động lưu bền vững tại <code>data/store.json</code> (tắt server mở lại vẫn còn nguyên cấu hình &amp; lịch sử gói tin).</p>
+        <div id="endpoints-list" class="endpoints-list"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- TAB 5: USER GUIDE -->
+  <main id="tab-guide" class="tab-panel">
+    <div class="guide-container">
+      <div class="guide-hero">
+        <div>
+          <h2>📖 Hướng Dẫn Sử Dụng NetPulse Toàn Tập (8 Vũ Khí Chủ Lực)</h2>
+          <p>Nắm trọn cách bắt gói tin Webhook, mở Public Tunnel 1-click, dò API bằng trình duyệt ngầm (Headless Chrome/Edge), giả mạo/dò khóa JWT, so sánh Diff 2 gói tin và Fuzzing API.</p>
+        </div>
+        <div class="guide-hero-actions">
+          <button class="btn btn-accent" onclick="triggerGuideSim('payment')">⚡ Bắn thử gói tin mẫu ngay</button>
+          <button class="btn btn-secondary" onclick="switchMainTab('inspector')">📡 Về màn hình Bắt Gói Tin</button>
+        </div>
+      </div>
+
+      <div class="guide-steps-grid">
+        <!-- Step 1 -->
+        <div class="guide-card">
+          <div class="guide-step-header">
+            <span class="step-num">Vũ khí 1</span>
+            <h3>📡 Bắt Gói Tin Webhook &amp; Xuất File Postman</h3>
+          </div>
+          <p>Mọi HTTP Request (<code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>PATCH</code>, <code>DELETE</code>) gửi tới đường dẫn <code>/hook/&lt;slug&gt;</code> đều sẽ được bắt và hiển thị tức thì theo thời gian thực.</p>
+          <ul class="guide-list">
+            <li><strong>Test nhanh không cần code:</strong> Bấm các nút <strong>"💳 Thanh toán (JWT + HMAC)"</strong>, <strong>"🤖 Telegram Bot"</strong> hoặc <strong>"⚠️ Payload Nghi vấn"</strong> ngay trên thanh trên cùng.</li>
+            <li><strong>Tự động tạo Endpoint:</strong> Bắn vào bất kỳ đường dẫn nào như <code>/hook/test-123</code>, NetPulse sẽ tự tạo Endpoint mới cho bạn.</li>
+            <li><strong>📦 Xuất Postman Collection:</strong> Bấm nút <strong>"📦 Postman"</strong> ở khung bên trái để tải toàn bộ các gói tin vừa bắt được ra file chuẩn <code>.postman_collection.json</code>.</li>
+          </ul>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="guide-card">
+          <div class="guide-step-header">
+            <span class="step-num">Vũ khí 2</span>
+            <h3>🔓 Giải Mã Tự Động (JWT, Base64, Hex &amp; Chữ Ký HMAC)</h3>
+          </div>
+          <p>Khi bấm chọn 1 gói tin ở danh sách bên trái, khung chi tiết bên phải cung cấp <strong>5 công cụ phân tích chuyên sâu</strong>:</p>
+          <ul class="guide-list">
+            <li><strong>🔍 Giải Mã &amp; Tổng Quan:</strong> Tự động quét Header, Query và JSON Body để bung nội dung <strong>JWT</strong> (kèm kiểm tra hạn <code>exp</code>), <strong>Basic Auth</strong> và chuỗi <strong>Base64</strong> ẩn.</li>
+            <li><strong>📦 Body &amp; Hex Dump:</strong> Xem JSON đã căn lề đẹp song song với bảng mã <strong>Hex + ASCII (512 bytes đầu)</strong>.</li>
+            <li><strong>🔐 Kiểm Tra Chữ Ký HMAC:</strong> Nhập <em>Secret Key</em> (VietQR, SePay, Casso, Stripe, GitHub, Telegram...) để đối chiếu chữ ký hoặc tính mã băm <code>HMAC-SHA256 / SHA1 / SHA512</code>.</li>
+            <li><strong>💻 Xuất Code:</strong> Chuyển gói tin thành lệnh <strong>cURL</strong>, <strong>PowerShell</strong>, <strong>Python (requests)</strong> hoặc <strong>JS (fetch)</strong> chỉ với 1 cú click.</li>
+          </ul>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="guide-card">
+          <div class="guide-step-header">
+            <span class="step-num">Vũ khí 3</span>
+            <h3>🔁 Replay Studio + 📥 cURL + 🌐 Biến Môi Trường + ✅ Assertions + 🛡️ CORS</h3>
+          </div>
+          <p>Dùng khi bạn muốn chỉnh sửa gói tin, nhập lệnh cURL từ Chrome F12, dùng biến môi trường hoặc kiểm chứng tự động:</p>
+          <ol class="guide-list numbered">
+            <li><strong>📥 Dán lệnh cURL &amp; 🌐 Biến môi trường (<code>{{BASE_URL}}</code>):</strong> Bóc tách lệnh <code>Copy as cURL</code> 1-click và định nghĩa biến dùng chung cho cả Replay lẫn Fuzzer.</li>
+            <li><strong>✅ Kiểm Chứng Tự Động (API Assertions — PASS/FAIL):</strong> Đặt điều kiện kiểm tra phản hồi (VD: <code>status == 200</code>, <code>durationMs &lt; 2000</code>, <code>json.success == true</code>) để hệ thống tự chấm PASS/FAIL mỗi lần bắn.</li>
+            <li><strong>🛡️ Quét Bảo Mật &amp; CORS + 📜 Lịch sử Replay:</strong> Chấm điểm an toàn (A–F) và ghim <code>⚖️ A / ⚖️ B</code> từ lịch sử Replay sang <strong>Diff Viewer</strong>.</li>
+          </ol>
+          <div class="guide-card-footer">
+            <button class="btn btn-secondary btn-sm" onclick="switchMainTab('replay')">👉 Mở Replay Studio</button>
+          </div>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="guide-card">
+          <div class="guide-step-header">
+            <span class="step-num">Vũ khí 4</span>
+            <h3>⚡ Quét Lỗ Hổng &amp; Kiểm Thử Biên (API Fuzzer)</h3>
+          </div>
+          <p>Thử nghiệm hàng loạt dữ liệu dị biệt (số âm, tràn số, SQLi, XSS, IDOR) xem API xử lý có an toàn không:</p>
+          <ol class="guide-list numbered">
+            <li>Từ gói tin bất kỳ, bấm <strong>"⚡ Đẩy sang Fuzzer"</strong> (hoặc mở tab <strong>API Fuzzer</strong>).</li>
+            <li>Đặt từ khóa <code>{{FUZZ}}</code> vào vị trí bạn muốn chèn payload (trên URL, trong Header, hoặc trong Body JSON, ví dụ: <code>"amount": "{{FUZZ}}"</code>).</li>
+            <li>Chọn <strong>Bộ mẫu Payload có sẵn</strong> (Boundary số âm/tràn số, SQLi/NoSQLi, XSS/SSTI, hoặc dò IDOR 1..15).</li>
+            <li>Bấm <strong>"⚡ Chạy Fuzzing &amp; Phân Tích Dị Thường"</strong>: Hệ thống tự đo <strong>Baseline</strong> chuẩn trước, sau đó bắn đa luồng và <strong>tự động tô đỏ các dòng phản hồi bất thường</strong>.</li>
+          </ol>
+          <div class="guide-card-footer">
+            <button class="btn btn-warning btn-sm" onclick="switchMainTab('fuzzer')">👉 Mở API Fuzzer</button>
+          </div>
+        </div>
+
+        <!-- Step 5: API Hunter + Headless CDP -->
+        <div class="guide-card">
+          <div class="guide-step-header">
+            <span class="step-num">Vũ khí 5</span>
+            <h3>🕵️‍♂️ Dò API Trang Web + Bắt Sống Bằng Trình Duyệt Ngầm</h3>
+          </div>
+          <p>Dán link trang web bất kỳ vào tab <strong>"🕵️‍♂️ Dò API Trang Web"</strong> để lấy toàn bộ API tĩnh lẫn động:</p>
+          <ol class="guide-list numbered">
+            <li>Tích chọn <strong>"🌐 Bắt sống XHR/Fetch bằng Trình duyệt ngầm (Chrome/Edge)"</strong> rồi bấm <strong>"🔍 Quét &amp; Lấy API"</strong> (hoặc bấm <em>"🧪 Mẫu Demo Shop"</em>).</li>
+            <li>NetPulse sẽ đồng thời: <strong>(a)</strong> Mở Chrome/Edge chạy ngầm để bắt sống 100% các request <code>XHR / Fetch</code> thực tế kèm Header &amp; Token thật, và <strong>(b)</strong> Tải toàn bộ file <code>.js</code> bundle để quét các đường dẫn <code>/api/v1/...</code>, <code>fetch()</code>, <code>axios</code>, <code>OpenAPI/Swagger</code> và biến <code>NEXT_PUBLIC_* / VITE_*</code>.</li>
+            <li>Bấm <strong>"🚀 Gọi thử"</strong> để xem phản hồi JSON ngay tại chỗ, <strong>"🔁 Replay"</strong> để nạp kèm cả Header/Token thật sang Replay, hoặc <strong>"📦 Xuất Postman (.json)"</strong>!</li>
+          </ol>
+          <div class="guide-card-footer">
+            <button class="btn btn-accent btn-sm" onclick="switchMainTab('hunter')">👉 Mở Dò API Trang Web</button>
+          </div>
+        </div>
+
+        <!-- Step 6: JWT Studio -->
+        <div class="guide-card">
+          <div class="guide-step-header">
+            <span class="step-num">Vũ khí 6</span>
+            <h3>🔐 JWT Studio (Chỉnh Sửa, Giả Mạo <code>alg:none</code> &amp; Dò Secret)</h3>
+          </div>
+          <p>Khi bắt được gói tin có chứa JWT, bấm <strong>"🔐 Mở trong JWT Studio"</strong> (hoặc mở tab <strong>JWT Studio</strong>):</p>
+          <ul class="guide-list">
+            <li><strong>Chỉnh sửa nhanh:</strong> Bấm <strong>"👑 role=admin"</strong> để nâng quyền trong Payload hoặc <strong>"⏰ +24h exp"</strong> để gia hạn token.</li>
+            <li><strong>Ký mới hoặc Tấn công <code>alg: none</code>:</strong> Chọn ký chuẩn HMAC (<code>HS256/384/512</code>) hoặc tạo token không chữ ký (<code>alg: none</code>) để kiểm thử lỗi bỏ qua xác thực chữ ký, rồi bấm <strong>"🔁 Gắn Token Này Sang Replay Studio"</strong>.</li>
+            <li><strong>🔥 Dò Tìm Secret Key Yếu:</strong> Bấm nút dò khóa để tự động thử hơn 30 khóa mặc định phổ biến (kèm wordlist riêng của bạn) trong vài mili-giây.</li>
+          </ul>
+          <div class="guide-card-footer">
+            <button class="btn btn-secondary btn-sm" onclick="switchMainTab('jwt')">👉 Mở JWT Studio</button>
+          </div>
+        </div>
+
+        <!-- Step 7: Diff Viewer -->
+        <div class="guide-card">
+          <div class="guide-step-header">
+            <span class="step-num">Vũ khí 7</span>
+            <h3>⚖️ So Sánh 2 Gói Tin (Side-by-Side Diff Viewer)</h3>
+          </div>
+          <p>Đối chiếu sự khác biệt chi tiết giữa 2 gói tin Webhook hoặc 2 lần gọi API:</p>
+          <ol class="guide-list numbered">
+            <li>Trong màn hình Bắt Gói Tin, bấm <strong>"⚖️ Ghim làm Gói A"</strong> ở gói thứ nhất, sau đó chọn gói thứ hai và bấm <strong>"⚖️ So sánh với A (Gói B)"</strong> (hoặc chọn trực tiếp ở tab <strong>So Sánh Gói Tin</strong>).</li>
+            <li>Xem ngay: <strong>Bảng chênh lệch thời gian/kích thước</strong>, <strong>Danh sách các trường JSON bị đổi giá trị</strong>, <strong>So sánh Headers/Query</strong> và <strong>Line-by-Line Body Diff</strong> (tô xanh dòng thêm mới <code>+</code>, tô đỏ dòng bị xóa <code>-</code>).</li>
+          </ol>
+          <div class="guide-card-footer">
+            <button class="btn btn-secondary btn-sm" onclick="switchMainTab('diff')">👉 Mở So Sánh Gói Tin (Diff)</button>
+          </div>
+        </div>
+
+        <!-- Step 8: 1-Click Public Tunnel & Mock/Proxy -->
+        <div class="guide-card">
+          <div class="guide-step-header">
+            <span class="step-num">Vũ khí 8</span>
+            <h3>🌍 Public Tunnel, 🔒 HMAC 401, 🔔 Cảnh Báo Telegram/Discord &amp; 💾 Lưu Trữ Bền Vững</h3>
+          </div>
+          <p>Nhận Webhook thật từ Internet, bắn cảnh báo tự động và lưu trữ bền vững:</p>
+          <ul class="guide-list">
+            <li><strong>🌍 Bật Public Tunnel 1-Click:</strong> Ngay góc phải thanh <em>Endpoint đang chọn</em>, chọn <code>Ngrok</code> hoặc <code>localhost.run (SSH miễn phí)</code> rồi bấm <strong>"🌍 Bật Public Tunnel"</strong> để nhận link <code>https://...</code> công khai!</li>
+            <li><strong>🔒 Luật HMAC 401 &amp; 🔔 Cảnh báo Telegram/Discord:</strong> Tự động trả về HTTP 401 khi sai chữ ký HMAC, và tự động đẩy cảnh báo về Telegram Bot / Discord Webhook khi có gói tin tới (hoặc chỉ khi phát hiện gói tin dị thường).</li>
+            <li><strong>💾 Lưu trữ bền vững &amp; Xuất/Nhập Backup:</strong> Toàn bộ dữ liệu tự động lưu tại <code>data/store.json</code>, kèm nút <strong>"📥 Xuất Backup (.json)" / "📤 Nhập Backup"</strong>.</li>
+          </ul>
+          <div class="guide-card-footer">
+            <button class="btn btn-secondary btn-sm" onclick="switchMainTab('endpoints')">👉 Mở Cấu Hình Endpoint</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="toast-container" class="toast-container"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
+

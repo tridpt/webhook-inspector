@@ -1,0 +1,38 @@
+﻿# Dependencies & Virtual Environments
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.jks
+
+# Runtime State, Databases & Build Outputs
+/data/
+/sandbox/
+/storage/
+/outputs/
+/build-out/
+/dist/
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+messages_store.json
+
+# OS / Editor
+.DS_Store
+Thumbs.db

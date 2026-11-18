@@ -1,0 +1,11 @@
+{
+  "name": "webhook-inspector",
+  "version": "1.0.0",
+  "description": "NetPulse — Webhook & Request Inspector, JWT/Base64/HMAC Decoder, Replay Studio & API Fuzzer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test_server.js"
+  }
+}
+
